@@ -1,27 +1,24 @@
-##"Malloyyo internal analytics — sources over the application's own Postgres database."
+##" Malloyyo internal analytics — sources over the application's own Postgres database."
 
+#" Malloyyo registered user accounts."
 source: users is malloyyo_db.table('public.users') extend {
-  ##"Registered user accounts."
+
   primary_key: id
 
   measure:
     user_count is count()
     admin_count is count() { where: is_admin = true }
-
-  view: by_month is {
-    group_by: month is created_at.month
-    aggregate: user_count
-  }
 }
 
+# "Malloy datasets (GitHub repos) added by users."
 source: datasets is malloyyo_db.table('public.datasets') extend {
-  ##"Malloy datasets (GitHub repos) added by users."
+  
   primary_key: id
 
   measure:
     dataset_count is count()
-    ready_count is count() { where: status = 'ready' }
-    failed_count is count() { where: status = 'failed' }
+    ready_count is count() { where: status::string = 'ready' }
+    failed_count is count() { where: status::string = 'failed' }
     public_count is count() { where: is_public = true }
 
   view: by_status is {
@@ -29,14 +26,11 @@ source: datasets is malloyyo_db.table('public.datasets') extend {
     aggregate: dataset_count
   }
 
-  view: by_month is {
-    group_by: month is created_at.month
-    aggregate: dataset_count, ready_count
-  }
 }
 
+#" Compiled Malloy model versions. Each dataset refresh creates a new version.
 source: malloy_models is malloyyo_db.table('public.malloy_models') extend {
-  ##"Compiled Malloy model versions. Each dataset refresh creates a new version."
+ 
   primary_key: id
 
   measure:
@@ -47,8 +41,9 @@ source: malloy_models is malloyyo_db.table('public.malloy_models') extend {
     has_error is compile_error != null
 }
 
+#" Individual .malloy files stored per model version.
 source: malloy_model_files is malloyyo_db.table('public.malloy_model_files') extend {
-  ##"Individual .malloy files stored per model version."
+
   primary_key: id
 
   measure:
@@ -58,8 +53,9 @@ source: malloy_model_files is malloyyo_db.table('public.malloy_model_files') ext
     extension is substr(path, strpos(path, '.'))
 }
 
+#" Analytical queries run via the MCP endpoint.
 source: queries is malloyyo_db.table('public.queries') extend {
-  ##"Analytical queries run via the MCP endpoint."
+
   primary_key: id
 
   measure:
@@ -89,48 +85,5 @@ source: queries is malloyyo_db.table('public.queries') extend {
   }
 }
 
-source: oauth_clients is malloyyo_db.table('public.oauth_clients') extend {
-  ##"Registered MCP client applications (one per claude.ai integration)."
-  primary_key: id
 
-  measure:
-    client_count is count()
 
-  view: by_month is {
-    group_by: month is created_at.month
-    aggregate: client_count
-  }
-}
-
-source: oauth_access_tokens is malloyyo_db.table('public.oauth_access_tokens') extend {
-  ##"Issued bearer tokens. Each represents an active MCP session."
-  primary_key: token_hash
-
-  measure:
-    token_count is count()
-    revoked_count is count() { where: revoked_at != null }
-
-  view: by_client is {
-    group_by: client_id
-    aggregate: token_count, revoked_count
-  }
-}
-
-source: oauth_authorization_codes is malloyyo_db.table('public.oauth_authorization_codes') extend {
-  ##"One-time OAuth authorization codes (60s TTL). High count = active OAuth flows."
-  primary_key: code_hash
-
-  measure:
-    code_count is count()
-    consumed_count is count() { where: consumed_at != null }
-}
-
-source: oauth_refresh_tokens is malloyyo_db.table('public.oauth_refresh_tokens') extend {
-  ##"Refresh tokens (90d TTL, rotated on use)."
-  primary_key: id
-
-  measure:
-    token_count is count()
-    revoked_count is count() { where: revoked_at != null }
-    replaced_count is count() { where: replaced_by_id != null }
-}
