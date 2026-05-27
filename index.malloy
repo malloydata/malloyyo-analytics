@@ -32,13 +32,31 @@ source: datasets is malloyyo_db.table('public.datasets') extend {
 source: malloy_models is malloyyo_db.table('public.malloy_models') extend {
  
   primary_key: id
+  join_one: dataset is datasets on dataset_id = dataset.id
 
   measure:
     model_count is count()
     errored_count is count() { where: compile_error != null }
 
+
   dimension:
     has_error is compile_error != null
+
+  view: show_models is {
+    group_by:
+      dataset.name
+    nest: sources is {
+      group_by: source_definition is sources::string
+      limit: 1
+    }
+    aggregate:
+      version_count is count(version)
+      first_created is min(created_at)
+      last_updated is max(created_at)
+
+    order_by: last_updated desc
+    limit: 20
+  }
 }
 
 #" Individual .malloy files stored per model version.
@@ -68,6 +86,12 @@ source: queries is malloyyo_db.table('public.queries') extend {
   dimension:
     has_error is error != null
     created_date is created_at.day
+    source_name is regexp_extract(malloy_source, r'run: ([A-Za-z0-9_]+)[-\s]') 
+
+  view: by_source is {
+    group_by: source_name
+    aggregate: query_count, error_count, avg_duration_ms
+  }
 
   view: by_day is {
     group_by: created_date
