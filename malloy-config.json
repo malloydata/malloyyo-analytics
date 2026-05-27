@@ -1,0 +1,8 @@
+{
+  "connections": {
+    "malloyyo_db": {
+      "is": "postgres",
+      "connectionString": {"env": "DATABASE_URL"}
+    }
+  }
+}

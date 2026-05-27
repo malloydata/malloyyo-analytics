@@ -1,0 +1,136 @@
+##"Malloyyo internal analytics — sources over the application's own Postgres database."
+
+source: users is malloyyo_db.table('public.users') extend {
+  ##"Registered user accounts."
+  primary_key: id
+
+  measure:
+    user_count is count()
+    admin_count is count() { where: is_admin = true }
+
+  view: by_month is {
+    group_by: month is created_at.month
+    aggregate: user_count
+  }
+}
+
+source: datasets is malloyyo_db.table('public.datasets') extend {
+  ##"Malloy datasets (GitHub repos) added by users."
+  primary_key: id
+
+  measure:
+    dataset_count is count()
+    ready_count is count() { where: status = 'ready' }
+    failed_count is count() { where: status = 'failed' }
+    public_count is count() { where: is_public = true }
+
+  view: by_status is {
+    group_by: status
+    aggregate: dataset_count
+  }
+
+  view: by_month is {
+    group_by: month is created_at.month
+    aggregate: dataset_count, ready_count
+  }
+}
+
+source: malloy_models is malloyyo_db.table('public.malloy_models') extend {
+  ##"Compiled Malloy model versions. Each dataset refresh creates a new version."
+  primary_key: id
+
+  measure:
+    model_count is count()
+    errored_count is count() { where: compile_error != null }
+
+  dimension:
+    has_error is compile_error != null
+}
+
+source: malloy_model_files is malloyyo_db.table('public.malloy_model_files') extend {
+  ##"Individual .malloy files stored per model version."
+  primary_key: id
+
+  measure:
+    file_count is count()
+
+  dimension:
+    extension is substr(path, strpos(path, '.'))
+}
+
+source: queries is malloyyo_db.table('public.queries') extend {
+  ##"Analytical queries run via the MCP endpoint."
+  primary_key: id
+
+  measure:
+    query_count is count()
+    error_count is count() { where: error != null }
+    success_count is count() { where: error = null }
+    avg_duration_ms is avg(duration_ms)
+    total_rows_returned is sum(row_count)
+
+  dimension:
+    has_error is error != null
+    created_date is created_at.day
+
+  view: by_day is {
+    group_by: created_date
+    aggregate: query_count, error_count, avg_duration_ms
+  }
+
+  view: slowest is {
+    order_by: duration_ms desc
+    select:
+      malloy_source
+      duration_ms
+      row_count
+      created_at
+    limit: 20
+  }
+}
+
+source: oauth_clients is malloyyo_db.table('public.oauth_clients') extend {
+  ##"Registered MCP client applications (one per claude.ai integration)."
+  primary_key: id
+
+  measure:
+    client_count is count()
+
+  view: by_month is {
+    group_by: month is created_at.month
+    aggregate: client_count
+  }
+}
+
+source: oauth_access_tokens is malloyyo_db.table('public.oauth_access_tokens') extend {
+  ##"Issued bearer tokens. Each represents an active MCP session."
+  primary_key: token_hash
+
+  measure:
+    token_count is count()
+    revoked_count is count() { where: revoked_at != null }
+
+  view: by_client is {
+    group_by: client_id
+    aggregate: token_count, revoked_count
+  }
+}
+
+source: oauth_authorization_codes is malloyyo_db.table('public.oauth_authorization_codes') extend {
+  ##"One-time OAuth authorization codes (60s TTL). High count = active OAuth flows."
+  primary_key: code_hash
+
+  measure:
+    code_count is count()
+    consumed_count is count() { where: consumed_at != null }
+}
+
+source: oauth_refresh_tokens is malloyyo_db.table('public.oauth_refresh_tokens') extend {
+  ##"Refresh tokens (90d TTL, rotated on use)."
+  primary_key: id
+
+  measure:
+    token_count is count()
+    revoked_count is count() { where: revoked_at != null }
+    replaced_count is count() { where: replaced_by_id != null }
+}
