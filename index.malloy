@@ -35,10 +35,18 @@ source: malloy_model_files_base is malloyyo_db.table('public.malloy_model_files'
     extension is substr(path, strpos(path, '.'))
 }
 
-source: investigations_base is malloyyo_db.table('public.investigations') extend {
+source: conversations_base is malloyyo_db.table('public.conversations') extend {
   primary_key: id
   measure:
-    investigation_count is count()
+    conversation_count is count()
+  dimension:
+    created_date is created_at.day
+}
+
+source: inquiries_base is malloyyo_db.table('public.inquiries') extend {
+  primary_key: id
+  measure:
+    inquiry_count is count()
   dimension:
     created_date is created_at.day
 }
@@ -114,28 +122,53 @@ source: malloy_model_files is malloy_model_files_base extend {
   join_one: model is malloy_models_base on model_id = model.id
 }
 
-#" Investigation sessions started via the MCP start_investigation tool."
-source: investigations is investigations_base extend {
+#" A conversation is a session with a data source — one per claude.ai chat."
+source: conversations is conversations_base extend {
   join_one: user is users_base on user_id = user.id
-  join_many: tool_calls is tool_calls_base on id = tool_calls.investigation_id
+  join_one: dataset is datasets_base on dataset_id = dataset.id
+  join_many: inquiries is inquiries_base on id = inquiries.conversation_id
   view: by_user is {
     group_by: user.email
-    aggregate: investigation_count
-    order_by: investigation_count desc
+    aggregate: conversation_count
+    order_by: conversation_count desc
   }
-  view: with_tool_calls is {
-    group_by: synopsis, user.email, created_at
-    aggregate: tool_calls.tool_call_count, tool_calls.error_count
+  view: recent is {
+    group_by: user.email, context, created_at
+    aggregate: inq_count is inquiries.inquiry_count
     order_by: created_at desc
     limit: 20
   }
 }
 
-#" Individual MCP tool calls, linked to investigations and sequenced."
+#" An inquiry is a single question within a conversation."
+source: inquiries is inquiries_base extend {
+  join_one: conversation is conversations_base on conversation_id = conversation.id
+  join_many: tool_calls is tool_calls_base on id = tool_calls.inquiry_id
+  view: by_tool_count is {
+    group_by: question
+    aggregate:
+      tc_count is tool_calls.tool_call_count
+      tc_errors is tool_calls.error_count
+    order_by: tc_count desc
+    limit: 20
+  }
+  view: with_errors is {
+    having: tool_calls.error_count > 0
+    group_by: question, conversation.context
+    aggregate:
+      tc_count is tool_calls.tool_call_count
+      tc_errors is tool_calls.error_count
+    order_by: tc_errors desc
+    limit: 20
+  }
+}
+
+#" Individual MCP tool calls, sequenced within an inquiry."
 source: tool_calls is tool_calls_base extend {
+  join_one: inquiry is inquiries_base on inquiry_id = inquiry.id
+  join_one: conversation is conversations_base on inquiry.conversation_id = conversation.id
   join_one: user is users_base on user_id = user.id
   join_one: dataset is datasets_base on dataset_id = dataset.id
-  join_one: investigation is investigations_base on investigation_id = investigation.id
   view: by_tool is {
     group_by: tool_name
     aggregate: tool_call_count, error_count, avg_duration_ms
@@ -146,13 +179,13 @@ source: tool_calls is tool_calls_base extend {
   }
   view: compile_errors is {
     where: tool_name = 'compile_analytical_query' and has_error
-    group_by: error, mcp_source, investigation.synopsis
+    group_by: error, mcp_source, inquiry.question
     aggregate: tool_call_count
     order_by: tool_call_count desc
     limit: 50
   }
-  view: by_investigation is {
-    group_by: investigation.synopsis, user.email
+  view: by_inquiry is {
+    group_by: inquiry.question, conversation.context, user.email
     aggregate: tool_call_count, error_count
     order_by: tool_call_count desc
     limit: 20
