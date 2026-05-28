@@ -1,50 +1,101 @@
 ##" Malloyyo internal analytics — sources over the application's own Postgres database."
 
-#" Malloyyo registered user accounts."
-source: users is malloyyo_db.table('public.users') extend {
+// ── Base sources (no joins, just measures + dimensions) ──────────────────────
 
+source: users_base is malloyyo_db.table('public.users') extend {
   primary_key: id
-
   measure:
     user_count is count()
     admin_count is count() { where: is_admin = true }
 }
 
-# "Malloy datasets (GitHub repos) added by users."
-source: datasets is malloyyo_db.table('public.datasets') extend {
-  
+source: datasets_base is malloyyo_db.table('public.datasets') extend {
   primary_key: id
-
   measure:
     dataset_count is count()
     ready_count is count() { where: status::string = 'ready' }
     failed_count is count() { where: status::string = 'failed' }
     public_count is count() { where: is_public = true }
+}
 
+source: malloy_models_base is malloyyo_db.table('public.malloy_models') extend {
+  primary_key: id
+  measure:
+    model_count is count()
+    errored_count is count() { where: compile_error is not null }
+  dimension:
+    has_error is compile_error is not null
+}
+
+source: malloy_model_files_base is malloyyo_db.table('public.malloy_model_files') extend {
+  primary_key: id
+  measure:
+    file_count is count()
+  dimension:
+    extension is substr(path, strpos(path, '.'))
+}
+
+source: investigations_base is malloyyo_db.table('public.investigations') extend {
+  primary_key: id
+  measure:
+    investigation_count is count()
+  dimension:
+    created_date is created_at.day
+}
+
+source: tool_calls_base is malloyyo_db.table('public.tool_calls') extend {
+  primary_key: id
+  rename: mcp_source is `source`
+  measure:
+    tool_call_count is count()
+    error_count is count() { where: error is not null }
+    success_count is count() { where: error is null }
+    avg_duration_ms is avg(duration_ms)
+    total_rows_returned is sum(row_count)
+    compile_error_count is count() { where: tool_name = 'compile_analytical_query' and error is not null }
+  dimension:
+    has_error is error is not null
+    created_date is created_at.day
+}
+
+source: queries_base is malloyyo_db.table('public.queries') extend {
+  primary_key: id
+  measure:
+    query_count is count()
+    error_count is count() { where: error is not null }
+    success_count is count() { where: error is null }
+    avg_duration_ms is avg(duration_ms)
+    total_rows_returned is sum(row_count)
+  dimension:
+    has_error is error is not null
+    created_date is created_at.day
+    source_name is regexp_extract(malloy_source, r'run: ([A-Za-z0-9_]+)[-\s]')
+}
+
+// ── Main sources (with joins) ─────────────────────────────────────────────────
+
+#" Malloyyo registered user accounts."
+source: users is users_base extend {
+  view: by_day is {
+    group_by: created_at.day
+    aggregate: user_count
+  }
+}
+
+#" Malloy datasets (GitHub repos) added by users."
+source: datasets is datasets_base extend {
+  join_one: user is users_base on user_id = user.id
   view: by_status is {
     group_by: status
     aggregate: dataset_count
   }
-
 }
 
-#" Compiled Malloy model versions. Each dataset refresh creates a new version.
-source: malloy_models is malloyyo_db.table('public.malloy_models') extend {
- 
-  primary_key: id
-  join_one: dataset is datasets on dataset_id = dataset.id
-
-  measure:
-    model_count is count()
-    errored_count is count() { where: compile_error != null }
-
-
-  dimension:
-    has_error is compile_error != null
-
+#" Compiled Malloy model versions. Each dataset refresh creates a new version."
+source: malloy_models is malloy_models_base extend {
+  join_one: dataset is datasets_base on dataset_id = dataset.id
   view: show_models is {
-    group_by:
-      dataset.name
+    group_by: dataset.name
     nest: sources is {
       group_by: source_definition is sources::string
       limit: 1
@@ -53,61 +104,81 @@ source: malloy_models is malloyyo_db.table('public.malloy_models') extend {
       version_count is count(version)
       first_created is min(created_at)
       last_updated is max(created_at)
-
     order_by: last_updated desc
     limit: 20
   }
 }
 
-#" Individual .malloy files stored per model version.
-source: malloy_model_files is malloyyo_db.table('public.malloy_model_files') extend {
-
-  primary_key: id
-
-  measure:
-    file_count is count()
-
-  dimension:
-    extension is substr(path, strpos(path, '.'))
+#" Individual .malloy files stored per model version."
+source: malloy_model_files is malloy_model_files_base extend {
+  join_one: model is malloy_models_base on model_id = model.id
 }
 
-#" Analytical queries run via the MCP endpoint.
-source: queries is malloyyo_db.table('public.queries') extend {
-
-  primary_key: id
-
-  measure:
-    query_count is count()
-    error_count is count() { where: error != null }
-    success_count is count() { where: error = null }
-    avg_duration_ms is avg(duration_ms)
-    total_rows_returned is sum(row_count)
-
-  dimension:
-    has_error is error != null
-    created_date is created_at.day
-    source_name is regexp_extract(malloy_source, r'run: ([A-Za-z0-9_]+)[-\s]') 
-
-  view: by_source is {
-    group_by: source_name
-    aggregate: query_count, error_count, avg_duration_ms
+#" Investigation sessions started via the MCP start_investigation tool."
+source: investigations is investigations_base extend {
+  join_one: user is users_base on user_id = user.id
+  join_many: tool_calls is tool_calls_base on id = tool_calls.investigation_id
+  view: by_user is {
+    group_by: user.email
+    aggregate: investigation_count
+    order_by: investigation_count desc
   }
-
-  view: by_day is {
-    group_by: created_date
-    aggregate: query_count, error_count, avg_duration_ms
-  }
-
-  view: slowest is {
-    order_by: duration_ms desc
-    select:
-      malloy_source
-      duration_ms
-      row_count
-      created_at
+  view: with_tool_calls is {
+    group_by: synopsis, user.email, created_at
+    aggregate: tool_calls.tool_call_count, tool_calls.error_count
+    order_by: created_at desc
     limit: 20
   }
 }
 
+#" Individual MCP tool calls, linked to investigations and sequenced."
+source: tool_calls is tool_calls_base extend {
+  join_one: user is users_base on user_id = user.id
+  join_one: dataset is datasets_base on dataset_id = dataset.id
+  join_one: investigation is investigations_base on investigation_id = investigation.id
+  view: by_tool is {
+    group_by: tool_name
+    aggregate: tool_call_count, error_count, avg_duration_ms
+  }
+  view: by_day is {
+    group_by: created_date
+    aggregate: tool_call_count, error_count
+  }
+  view: compile_errors is {
+    where: tool_name = 'compile_analytical_query' and has_error
+    group_by: error, mcp_source, investigation.synopsis
+    aggregate: tool_call_count
+    order_by: tool_call_count desc
+    limit: 50
+  }
+  view: by_investigation is {
+    group_by: investigation.synopsis, user.email
+    aggregate: tool_call_count, error_count
+    order_by: tool_call_count desc
+    limit: 20
+  }
+}
 
-
+#" Analytical queries run via the MCP endpoint (legacy — superseded by tool_calls)."
+source: queries is queries_base extend {
+  join_one: user is users_base on user_id = user.id
+  join_one: dataset is datasets_base on dataset_id = dataset.id
+  view: by_source is {
+    group_by: source_name
+    aggregate: query_count, error_count, avg_duration_ms
+  }
+  view: by_day is {
+    group_by: created_date
+    aggregate: query_count, error_count, avg_duration_ms
+  }
+  view: by_user is {
+    group_by: user.email
+    aggregate: query_count, error_count, avg_duration_ms
+    order_by: query_count desc
+  }
+  view: slowest is {
+    order_by: duration_ms desc
+    select: malloy_source, duration_ms, row_count, created_at
+    limit: 20
+  }
+}
