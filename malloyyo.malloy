@@ -81,8 +81,9 @@ source: queries_base is malloyyo_db.table('public.queries') extend {
 }
 
 // ── Main sources (with joins) ─────────────────────────────────────────────────
+##" Internal data fro Malloyyo's own usage, pulled from the application's Postgres database. 
 
-#" Malloyyo registered user accounts."
+#" Malloyyo registered user accounts.
 source: users is users_base extend {
   view: by_day is {
     group_by: created_at.day
@@ -90,7 +91,7 @@ source: users is users_base extend {
   }
 }
 
-#" Malloy datasets (GitHub repos) added by users."
+#" Malloy datasets (GitHub repos) added by users.
 source: datasets is datasets_base extend {
   join_one: user is users_base on user_id = user.id
   view: by_status is {
@@ -99,7 +100,7 @@ source: datasets is datasets_base extend {
   }
 }
 
-#" Compiled Malloy model versions. Each dataset refresh creates a new version."
+#" Compiled Malloy model versions. Each dataset refresh creates a new version.
 source: malloy_models is malloy_models_base extend {
   join_one: dataset is datasets_base on dataset_id = dataset.id
   view: show_models is {
@@ -117,12 +118,12 @@ source: malloy_models is malloy_models_base extend {
   }
 }
 
-#" Individual .malloy files stored per model version."
+#" Individual .malloy files stored per model version.
 source: malloy_model_files is malloy_model_files_base extend {
   join_one: model is malloy_models_base on model_id = model.id
 }
 
-#" A conversation is a session with a data source — one per claude.ai chat."
+#" A conversation is a session with a data source — one per claude.ai chat.
 source: conversations is conversations_base extend {
   join_one: user is users_base on user_id = user.id
   join_one: dataset is datasets_base on dataset_id = dataset.id
@@ -140,7 +141,7 @@ source: conversations is conversations_base extend {
   }
 }
 
-#" An inquiry is a single question within a conversation."
+#" An inquiry is a single question within a conversation.
 source: inquiries is inquiries_base extend {
   join_one: conversation is conversations_base on conversation_id = conversation.id
   join_many: tool_calls is tool_calls_base on id = tool_calls.inquiry_id
@@ -163,7 +164,7 @@ source: inquiries is inquiries_base extend {
   }
 }
 
-#" Individual MCP tool calls, sequenced within an inquiry."
+#" Individual MCP tool calls, sequenced within an inquiry.
 source: tool_calls is tool_calls_base extend {
   join_one: inquiry is inquiries_base on inquiry_id = inquiry.id
   join_one: conversation is conversations_base on inquiry.conversation_id = conversation.id
@@ -192,7 +193,7 @@ source: tool_calls is tool_calls_base extend {
   }
 }
 
-#" Analytical queries run via the MCP endpoint (legacy — superseded by tool_calls)."
+#" Analytical queries run via the MCP endpoint (legacy — superseded by tool_calls).
 source: queries is queries_base extend {
   join_one: user is users_base on user_id = user.id
   join_one: dataset is datasets_base on dataset_id = dataset.id
