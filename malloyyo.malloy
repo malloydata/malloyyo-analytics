@@ -128,6 +128,21 @@ source: conversations is conversations_base extend {
   join_one: user is users_base on user_id = user.id
   join_one: dataset is datasets_base on dataset_id = dataset.id
   join_many: inquiries is inquiries_base on id = inquiries.conversation_id
+
+  # dashboard
+  view: by_user_and_conversation is {
+    group_by: user.name, user.email
+    aggregate: conversation_count
+    nest: conversations is {
+      group_by: created_date, context
+      aggregate: inquiries.inquiry_count
+      # list
+      nest: inquiries is {
+        group_by: inquiries.question
+      }
+    }
+    order_by: conversation_count desc
+  }
   view: by_user is {
     group_by: user.email
     aggregate: conversation_count
