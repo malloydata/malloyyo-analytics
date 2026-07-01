@@ -4,5 +4,15 @@
       "is": "postgres",
       "connectionString": {"env": "DATABASE_URL"}
     }
+  },
+  "malloyyo": {
+    "malloyyo": {
+      "url": "https://malloyyo.vercel.app",
+      "dataset": "c0ef6850-6065-4696-9ba9-32db96a93904"
+    },
+    "malloyyo-staging": {
+      "url": "https://malloyyo-staging.vercel.app",
+      "dataset": "c0ef6850-6065-4696-9ba9-32db96a93904"
+    }
   }
 }

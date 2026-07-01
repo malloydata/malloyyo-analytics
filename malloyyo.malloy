@@ -35,50 +35,39 @@ source: malloy_model_files_base is malloyyo_db.table('public.malloy_model_files'
     extension is substr(path, strpos(path, '.'))
 }
 
-source: conversations_base is malloyyo_db.table('public.conversations') extend {
-  primary_key: id
-  measure:
-    conversation_count is count()
-  dimension:
-    created_date is created_at.day
-}
-
-source: inquiries_base is malloyyo_db.table('public.inquiries') extend {
-  primary_key: id
-  measure:
-    inquiry_count is count()
-  dimension:
-    created_date is created_at.day
-}
-
-source: tool_calls_base is malloyyo_db.table('public.tool_calls') extend {
+source: history_base is malloyyo_db.table('public.history') extend {
   primary_key: id
   rename: mcp_source is `source`
   measure:
-    tool_call_count is count()
+    event_count is count()
     error_count is count() { where: error is not null }
     success_count is count() { where: error is null }
+    run_count is count() { where: executed = true }
+    validate_count is count() { where: executed = false }
+    syntax_error_count is count() { where: tool_name = 'query' and error is not null }
     avg_duration_ms is avg(duration_ms)
     total_rows_returned is sum(row_count)
-    compile_error_count is count() { where: tool_name = 'compile_analytical_query' and error is not null }
   dimension:
     has_error is error is not null
+    created_date is created_at.day
+    is_run is executed = true
+    is_validate is executed = false
+}
+
+source: saved_queries_base is malloyyo_db.table('public.saved_queries') extend {
+  primary_key: id
+  rename: sq_source is `source`
+  measure:
+    saved_query_count is count()
+  dimension:
     created_date is created_at.day
 }
 
-source: queries_base is malloyyo_db.table('public.queries') extend {
-  primary_key: id
+source: favorites_base is malloyyo_db.table('public.favorites') extend {
   measure:
-    query_count is count()
-    error_count is count() { where: error is not null }
-    success_count is count() { where: error is null }
-    avg_duration_ms is avg(duration_ms)
-    total_rows_returned is sum(row_count)
-  dimension:
-    has_error is error is not null
-    created_date is created_at.day
-    source_name is regexp_extract(malloy_source, r'run: ([A-Za-z0-9_]+)[-\s]')
+    favorite_count is count()
 }
+
 
 // ── Main sources (with joins) ─────────────────────────────────────────────────
 ##" Internal data fro Malloyyo's own usage, pulled from the application's Postgres database. 
@@ -123,111 +112,89 @@ source: malloy_model_files is malloy_model_files_base extend {
   join_one: model is malloy_models_base on model_id = model.id
 }
 
-#" A conversation is a session with a data source — one per claude.ai chat.
-source: conversations is conversations_base extend {
+#" Every MCP tool call AND ltool run, one row each, ordered within a session.
+#" Validate-only and failed attempts are kept here for syntax-error analytics.
+source: history is history_base extend {
   join_one: user is users_base on user_id = user.id
   join_one: dataset is datasets_base on dataset_id = dataset.id
-  join_many: inquiries is inquiries_base on id = inquiries.conversation_id
 
-  # dashboard
-  view: by_user_and_conversation is {
-    group_by: user.name, user.email
-    aggregate: conversation_count
-    nest: conversations is {
-      group_by: created_date, context
-      aggregate: inquiries.inquiry_count
-      # list
-      nest: inquiries is {
-        group_by: inquiries.question
-      }
-    }
-    order_by: conversation_count desc
-  }
-  view: by_user is {
-    group_by: user.email
-    aggregate: conversation_count
-    order_by: conversation_count desc
-  }
-  view: recent is {
-    group_by: user.email, context, created_at
-    aggregate: inq_count is inquiries.inquiry_count
-    order_by: created_at desc
-    limit: 20
-  }
-}
-
-#" An inquiry is a single question within a conversation.
-source: inquiries is inquiries_base extend {
-  join_one: conversation is conversations_base on conversation_id = conversation.id
-  join_many: tool_calls is tool_calls_base on id = tool_calls.inquiry_id
-  view: by_tool_count is {
-    group_by: question
-    aggregate:
-      tc_count is tool_calls.tool_call_count
-      tc_errors is tool_calls.error_count
-    order_by: tc_count desc
-    limit: 20
-  }
-  view: with_errors is {
-    having: tool_calls.error_count > 0
-    group_by: question, conversation.context
-    aggregate:
-      tc_count is tool_calls.tool_call_count
-      tc_errors is tool_calls.error_count
-    order_by: tc_errors desc
-    limit: 20
-  }
-}
-
-#" Individual MCP tool calls, sequenced within an inquiry.
-source: tool_calls is tool_calls_base extend {
-  join_one: inquiry is inquiries_base on inquiry_id = inquiry.id
-  join_one: conversation is conversations_base on inquiry.conversation_id = conversation.id
-  join_one: user is users_base on user_id = user.id
-  join_one: dataset is datasets_base on dataset_id = dataset.id
   view: by_tool is {
     group_by: tool_name
-    aggregate: tool_call_count, error_count, avg_duration_ms
+    aggregate: event_count, error_count, avg_duration_ms
   }
   view: by_day is {
     group_by: created_date
-    aggregate: tool_call_count, error_count
+    aggregate: event_count, run_count, error_count
   }
-  view: compile_errors is {
-    where: tool_name = 'compile_analytical_query' and has_error
-    group_by: error, mcp_source, inquiry.question
-    aggregate: tool_call_count
-    order_by: tool_call_count desc
+  #" The syntax-error attempts — what the model got wrong, most frequent first.
+  view: syntax_errors is {
+    where: tool_name = 'query' and has_error
+    group_by: error, mcp_source, question, author_model
+    aggregate: event_count
+    order_by: event_count desc
     limit: 50
   }
-  view: by_inquiry is {
-    group_by: inquiry.question, conversation.context, user.email
-    aggregate: tool_call_count, error_count
-    order_by: tool_call_count desc
+  #" One row per question, with the attempts that were made, in order.
+  view: by_question is {
+    group_by: question
+    aggregate: event_count, run_count, validate_count, error_count
+    nest: attempts is {
+      group_by: sequence, tool_name, executed, has_error, mcp_source
+      order_by: sequence
+    }
+    order_by: event_count desc
+    limit: 20
+  }
+  #" Which model authored the queries, and how error-prone each was.
+  view: by_author_model is {
+    group_by: author_model
+    aggregate: event_count, run_count, validate_count, error_count, avg_duration_ms
+    order_by: event_count desc
+  }
+  #" Which client (browser vs MCP client) drove the calls.
+  view: by_user_agent is {
+    group_by: user_agent
+    aggregate: event_count
+    order_by: event_count desc
+  }
+  #" Sessions — a burst of activity by one user on one dataset, events in order.
+  view: sessions is {
+    group_by: session_id, user.email, dataset.name
+    aggregate: event_count, started is min(created_at)
+    nest: events is {
+      group_by: sequence, tool_name, question, executed, has_error
+      order_by: sequence
+    }
+    order_by: started desc
     limit: 20
   }
 }
 
-#" Analytical queries run via the MCP endpoint (legacy — superseded by tool_calls).
-source: queries is queries_base extend {
+#" Durable, favoritable saved queries — the ones users deliberately keep/share.
+source: saved_queries is saved_queries_base extend {
   join_one: user is users_base on user_id = user.id
   join_one: dataset is datasets_base on dataset_id = dataset.id
-  view: by_source is {
-    group_by: source_name
-    aggregate: query_count, error_count, avg_duration_ms
-  }
-  view: by_day is {
-    group_by: created_date
-    aggregate: query_count, error_count, avg_duration_ms
-  }
-  view: by_user is {
-    group_by: user.email
-    aggregate: query_count, error_count, avg_duration_ms
-    order_by: query_count desc
-  }
-  view: slowest is {
-    order_by: duration_ms desc
-    select: malloy_source, duration_ms, row_count, created_at
+  join_many: favorites is favorites_base on id = favorites.saved_query_id
+
+  #" Most-favorited saved queries.
+  view: most_favorited is {
+    group_by: question, sq_source, slug
+    aggregate: fav_count is favorites.favorite_count
+    order_by: fav_count desc
     limit: 20
   }
+  view: by_dataset is {
+    group_by: dataset.name
+    aggregate:
+      saved_query_count
+      fav_count is favorites.favorite_count
+    order_by: saved_query_count desc
+  }
+  view: by_author_model is {
+    group_by: author_model
+    aggregate: saved_query_count
+    order_by: saved_query_count desc
+  }
 }
+
+run: history -> by_question

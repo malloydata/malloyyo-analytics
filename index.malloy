@@ -1,3 +1,13 @@
-import {users, datasets, conversations, inquiries, tool_calls, queries, malloy_models} from "./malloyyo.malloy"
+##|"
+Internal Malloyyo usage data.  Used for analysiing the queries, errors and kinds of questions that users ask.
+|##
 
-export {users, datasets, conversations, inquiries, tool_calls, queries, malloy_models}
+##|(agent)
+Only use these sources when the users asks specifically for how Malloyyo itself is being used.  Look for
+questions about "the  Malloyyo MCP server", "internal Malloyyo usage".  The user is likely talking
+about something else.  If you think they might be  asking about this but it is unclear, ask a clarifying question.
+|##
+
+import {users, datasets, malloy_models, history, saved_queries} from "./malloyyo.malloy"
+
+export {users, datasets, malloy_models, history, saved_queries}
