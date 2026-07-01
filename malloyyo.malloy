@@ -118,6 +118,24 @@ source: history is history_base extend {
   join_one: user is users_base on user_id = user.id
   join_one: dataset is datasets_base on dataset_id = dataset.id
 
+  #" Flat, time-ordered feed of raw events — every call, newest first. Refine
+  #" with a filter, e.g. `history -> recent + { where: has_error }`.
+  view: recent is {
+    select:
+      created_at
+      user.email
+      tool_name
+      mcp_source
+      question
+      executed
+      has_error
+      duration_ms
+      author_model
+      user_agent
+    order_by: created_at desc
+    limit: 200
+  }
+
   view: by_tool is {
     group_by: tool_name
     aggregate: event_count, error_count, avg_duration_ms
