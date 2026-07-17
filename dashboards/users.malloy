@@ -1,0 +1,28 @@
+##! experimental.givens
+import "../malloyyo.malloy"
+
+#" Per-user Malloyyo activity — who's active, how much, which tools, and which AI.
+#" "Last active" is the most recent event we've seen (there is no login timestamp).
+#" Click an email to open that user's detail dashboard.
+# artifact { title="Users" }
+query: users_overview is history -> {
+  where: created_at ~ $PERIOD
+  group_by: user.name, email
+  aggregate:
+    events is event_count
+    last_active is max(created_at)
+    first_active is min(created_at)
+    errors is error_count
+  nest: tools is {
+    group_by: tool_name
+    aggregate: event_count
+    order_by: event_count desc
+  }
+  nest: ai is {
+    group_by: author_model
+    aggregate: event_count
+    order_by: event_count desc
+  }
+  order_by: last_active desc
+  limit: 100
+}

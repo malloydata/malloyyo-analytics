@@ -1,3 +1,4 @@
+##! experimental.givens
 ##" Malloyyo internal analytics — sources over the application's own Postgres database."
 
 // ── Base sources (no joins, just measures + dimensions) ──────────────────────
@@ -118,6 +119,11 @@ source: history is history_base extend {
   join_one: user is users_base on user_id = user.id
   join_one: dataset is datasets_base on dataset_id = dataset.id
 
+  dimension:
+    #" A user's email — click to open their detail dashboard.
+    # drill { to=[user_detail, self] }
+    email is user.email
+
   #" Flat, time-ordered feed of raw events — every call, newest first. Refine
   #" with a filter, e.g. `history -> recent + { where: has_error }`.
   view: recent is {
@@ -214,5 +220,21 @@ source: saved_queries is saved_queries_base extend {
     order_by: saved_query_count desc
   }
 }
+
+// ── Givens (dashboard filter controls) ───────────────────────────────────────
+
+#" Distinct user emails, most-active first — options for the EMAIL control.
+query: email_suggest is history -> {
+  group_by: email
+  aggregate: event_count
+  order_by: event_count desc
+  limit: 500
+}
+
+given:
+  # label="Time period"
+  PERIOD :: filter<timestamp> is f''
+  # label="User" suggest { query=email_suggest dimension=email }
+  EMAIL :: filter<string> is f''
 
 run: history -> by_question

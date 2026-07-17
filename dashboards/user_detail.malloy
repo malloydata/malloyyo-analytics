@@ -1,0 +1,74 @@
+##! experimental.givens
+import "../malloyyo.malloy"
+
+#" Single-user deep dive — activity, tools, AI models, sessions, and raw events.
+#" Opened by clicking an email on the Users dashboard; the User control also
+#" lets you switch. "Last active" is the most recent event (no login timestamp).
+# artifact { title="User Detail" givens } dashboard {columns=6}
+query: user_detail_overview is history -> {
+  where:
+    email ~ $EMAIL,
+    created_at ~ $PERIOD
+
+  # colspan=2
+  aggregate:
+    events is event_count
+    runs is run_count
+    errors is error_count
+  # colspan=3
+  aggregate:
+    first_active is min(created_at)
+    last_active is max(created_at)
+
+  # break
+  # colspan=3 bar_chart
+  nest: tool_usage is {
+    group_by: tool_name
+    aggregate: event_count
+    order_by: event_count desc
+  }
+  # colspan=3 bar_chart
+  nest: ai_usage is {
+    group_by: author_model
+    aggregate: event_count
+    order_by: event_count desc
+  }
+  # colspan=6 line_chart
+  nest: activity_by_day is {
+    group_by: created_date
+    aggregate: event_count, run_count, error_count
+    order_by: created_date
+  }
+
+  # colspan=6
+  nest: sessions is {
+    group_by: session_id, dataset.name
+    aggregate:
+      event_count
+      started is min(created_at)
+    nest: events is {
+      group_by: sequence, tool_name, question, mcp_source, executed, has_error, duration_ms
+      order_by: sequence
+    }
+    order_by: started desc
+    limit: 20
+  }
+
+  // Flat, newest-first event feed. Uses group_by (one row per event, since
+  // created_at is unique) — a raw `select:` nest here collides with the
+  // doubly-nested `sessions` block above in Malloy's codegen.
+  # colspan=6
+  nest: recent_events is {
+    group_by:
+      created_at
+      tool_name
+      mcp_source
+      question
+      executed
+      has_error
+      duration_ms
+      author_model
+    order_by: created_at desc
+    limit: 100
+  }
+}
